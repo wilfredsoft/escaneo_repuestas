@@ -37,7 +37,7 @@ LLENADO_MIN_ID = 45
 
 # Configuración específica para Sesión 1 y 2 (43 filas, burbujas pequeñas)
 BINARIZACION_S12 = 225
-LLENADO_MIN_S12 = 52
+LLENADO_MIN_S12 = 28
 
 # Configuración específica para Sesión 3 (25 filas, burbujas grandes)
 BINARIZACION_S3 = 205
