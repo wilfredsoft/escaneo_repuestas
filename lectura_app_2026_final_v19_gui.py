@@ -37,7 +37,7 @@ LLENADO_MIN_ID = 45
 
 # Configuración específica para Sesión 1 y 2 (43 filas, burbujas pequeñas)
 BINARIZACION_S12 = 225
-LLENADO_MIN_S12 = 52
+LLENADO_MIN_S12 = 28
 
 # Configuración específica para Sesión 3 (25 filas, burbujas grandes)
 BINARIZACION_S3 = 205
@@ -52,7 +52,14 @@ MARCAS_SESION_REL = [(1560, 156), (1560, 218), (1560, 269), (1560, 320),
 # ============================================================
 
 def detectar_hoja_color(img_bgr):
-    """Detecta si la imagen tiene fondo magenta/rosado."""
+    """
+    Detecta si la hoja contiene impresión a color.
+
+    La detección anterior dependía de un rango HSV específico para magenta.
+    Las variaciones de escáner, tinta e iluminación podían dejar fuera tonos
+    más claros, oscuros o saturados. Aquí se mide la diferencia entre canales,
+    por lo que también se reconocen las líneas verdes del formulario.
+    """
     if img_bgr is None or len(img_bgr.shape) != 3:
         return False
     
@@ -62,53 +69,37 @@ def detectar_hoja_color(img_bgr):
     if zona.size == 0:
         return False
     
-    hsv = cv2.cvtColor(zona, cv2.COLOR_BGR2HSV)
-    lower_magenta = np.array([140, 10, 100])
-    upper_magenta = np.array([175, 100, 255])
-    mask = cv2.inRange(hsv, lower_magenta, upper_magenta)
-    
-    porcentaje_magenta = (np.count_nonzero(mask) / mask.size) * 100
-    return porcentaje_magenta > 3
+    canal_max = np.max(zona, axis=2).astype(np.int16)
+    canal_min = np.min(zona, axis=2).astype(np.int16)
+    diferencia_color = canal_max - canal_min
+
+    # Se excluyen zonas oscuras para no confundir grafito o tinta negra con
+    # color debido al ruido y a la compresión JPEG.
+    pixeles_color = (diferencia_color >= 12) & (canal_max >= 100)
+    porcentaje_color = (np.count_nonzero(pixeles_color) / pixeles_color.size) * 100
+
+    return porcentaje_color > 2
 
 def eliminar_magenta(img_bgr):
-    """Elimina el color magenta de la imagen (desde claro hasta oscuro)."""
+    """
+    Suprime la impresión de color conservando grafito y tinta negra.
+
+    El máximo de los canales BGR convierte en claro cualquier píxel que tenga
+    al menos un canal claro (magenta, verde y sus variaciones). Las marcas
+    negras permanecen oscuras porque sus tres canales tienen valores bajos.
+    Este método evita mantener rangos HSV distintos para cada lote de hojas.
+    """
     if img_bgr is None:
         return None
     
     if len(img_bgr.shape) != 3:
         return img_bgr
     
-    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-    
-    # Rangos de magenta (claro a oscuro)
-    lower_magenta1 = np.array([140, 5, 200])
-    upper_magenta1 = np.array([170, 30, 255])
-    
-    lower_magenta2 = np.array([140, 30, 150])
-    upper_magenta2 = np.array([170, 60, 200])
-    
-    lower_magenta3 = np.array([140, 60, 100])
-    upper_magenta3 = np.array([170, 100, 150])
-    
-    mask1 = cv2.inRange(hsv, lower_magenta1, upper_magenta1)
-    mask2 = cv2.inRange(hsv, lower_magenta2, upper_magenta2)
-    mask3 = cv2.inRange(hsv, lower_magenta3, upper_magenta3)
-    
-    mask_magenta = cv2.bitwise_or(mask1, mask2)
-    mask_magenta = cv2.bitwise_or(mask_magenta, mask3)
-    
-    porcentaje = (np.count_nonzero(mask_magenta) / mask_magenta.size) * 100
-    if porcentaje < 1:
-        return img_bgr
-    
-    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    resultado = np.zeros_like(img_gray)
-    resultado[mask_magenta > 0] = 255
-    resultado[mask_magenta == 0] = img_gray[mask_magenta == 0]
-    
-    _, resultado_final = cv2.threshold(resultado, 180, 255, cv2.THRESH_BINARY)
-    
-    return cv2.cvtColor(resultado_final, cv2.COLOR_GRAY2BGR)
+    resultado = np.max(img_bgr, axis=2).astype(np.uint8)
+
+    # No se aplica un umbral binario global: hacerlo aquí puede borrar marcas
+    # tenues de lápiz. Cada zona conserva después su umbral especializado.
+    return cv2.cvtColor(resultado, cv2.COLOR_GRAY2BGR)
 
 # ============================================================
 # DETECCIÓN DE RUTAS DE RED
@@ -225,14 +216,14 @@ def anclar_hoja_desde_bordes(img_gray):
     
     W_ESPERADO = 634
     H_ESPERADO = 656
-    TOLERANCIA_SIZE = 200
-    ZONA_X_MAX = REF_ID_X + 150
-    ZONA_Y_MAX = REF_ID_Y + 150
+    TOLERANCIA_SIZE = 60
+    DESPLAZAMIENTO_MAX = 20
     
     for cnt in contornos:
         x, y, w, h = cv2.boundingRect(cnt)
         size_ok = (abs(w - W_ESPERADO) < TOLERANCIA_SIZE) and (abs(h - H_ESPERADO) < TOLERANCIA_SIZE)
-        zona_ok = (x >= 0) and (x <= ZONA_X_MAX) and (y >= 0) and (y <= ZONA_Y_MAX)
+        zona_ok = (abs(x - REF_ID_X) <= DESPLAZAMIENTO_MAX) and \
+                  (abs(y - REF_ID_Y) <= DESPLAZAMIENTO_MAX)
         
         if size_ok and zona_ok:
             candidatos.append((x, y, w, h))
@@ -247,6 +238,41 @@ def anclar_hoja_desde_bordes(img_gray):
     
     return 0, 0, REF_ID_X, REF_ID_Y, 634, 656
 
+def corregir_orientacion(img_bgr):
+    """
+    Coloca la hoja en orientación vertical usando las marcas del borde.
+
+    El formulario tiene una columna de marcas negras en el borde derecho.
+    Se comparan las dos orientaciones verticales posibles y se conserva la
+    que concentra más píxeles oscuros a la derecha que a la izquierda.
+    """
+    if img_bgr is None or len(img_bgr.shape) != 3:
+        return img_bgr
+
+    h, w = img_bgr.shape[:2]
+
+    if w > h:
+        candidatos = [
+            cv2.rotate(img_bgr, cv2.ROTATE_90_CLOCKWISE),
+            cv2.rotate(img_bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        ]
+    else:
+        candidatos = [
+            img_bgr,
+            cv2.rotate(img_bgr, cv2.ROTATE_180)
+        ]
+
+    def puntaje_borde(imagen):
+        gris = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
+        ancho_borde = max(20, int(gris.shape[1] * 0.06))
+        borde_derecho = gris[:, -ancho_borde:]
+        borde_izquierdo = gris[:, :ancho_borde]
+        proporcion_derecha = np.mean(borde_derecho < 80)
+        proporcion_izquierda = np.mean(borde_izquierdo < 80)
+        return proporcion_derecha - proporcion_izquierda
+
+    return max(candidatos, key=puntaje_borde)
+
 def procesar_hoja(args):
     """Procesa una sola hoja con anclaje correcto y eliminación de magenta."""
     ruta_archivo, ruta_carpeta = args
@@ -255,6 +281,9 @@ def procesar_hoja(args):
         img_raw = cv2.imread(os.path.join(ruta_carpeta, ruta_archivo))
         if img_raw is None:
             return (ruta_archivo, None)
+        
+        # Corregir hojas horizontales o invertidas antes de calcular zonas.
+        img_raw = corregir_orientacion(img_raw)
         
         img_h, img_w = img_raw.shape[:2]
         
