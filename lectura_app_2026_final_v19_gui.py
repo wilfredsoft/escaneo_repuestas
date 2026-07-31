@@ -7,7 +7,7 @@ import time
 import sys
 from pyzbar.pyzbar import decode
 import re
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import multiprocessing
 import shutil
 import tempfile
@@ -24,6 +24,10 @@ if hasattr(multiprocessing, 'freeze_support'):
 
 # Detectar sistema operativo
 SISTEMA_OP = platform.system()
+
+# La redirección de stderr usada por pyzbar afecta al proceso completo. Este
+# bloqueo evita que dos hilos manipulen al mismo tiempo el descriptor global.
+BARCODE_STDERR_LOCK = threading.Lock()
 
 # ============================================================
 # CONFIGURACIÓN DE SENSIBILIDAD Y DEBUG
@@ -161,19 +165,20 @@ def leer_barcode_optimizado(roi_barcode):
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     processed = clahe.apply(gray)
 
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    old_stderr = os.dup(2)
-    os.dup2(devnull, 2)
+    with BARCODE_STDERR_LOCK:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stderr = os.dup(2)
+        os.dup2(devnull, 2)
 
-    try:
-        decoded = decode(processed)
-        if not decoded:
-            _, thresh = cv2.threshold(processed, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            decoded = decode(thresh)
-    finally:
-        os.dup2(old_stderr, 2)
-        os.close(devnull)
-        os.close(old_stderr)
+        try:
+            decoded = decode(processed)
+            if not decoded:
+                _, thresh = cv2.threshold(processed, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                decoded = decode(thresh)
+        finally:
+            os.dup2(old_stderr, 2)
+            os.close(devnull)
+            os.close(old_stderr)
         
     if decoded:
         barcode_text = decoded[0].data.decode('utf-8', errors='ignore')
@@ -661,11 +666,23 @@ class ScanAppGUI(ctk.CTk):
             self.log_message(f"\n Procesando {len(archivos)} imágenes...")
             archivos.sort(key=natural_sort_key)
             
+            executor_class = None
+
             if SISTEMA_OP == 'Darwin':
                 self.log_message(" macOS detectado - Usando procesamiento secuencial")
                 usar_paralelismo = False
+            elif getattr(sys, 'frozen', False):
+                # PyInstaller ejecuta el script como __main__. En Windows los
+                # procesos hijos no pueden importar procesar_hoja desde ese
+                # módulo temporal y ProcessPoolExecutor termina abruptamente.
+                num_workers = min(8, max(2, multiprocessing.cpu_count()))
+                executor_class = ThreadPoolExecutor
+                self.log_message(
+                    f" Ejecutable detectado - Usando {num_workers} hilos en paralelo")
+                usar_paralelismo = True
             else:
                 num_workers = multiprocessing.cpu_count()
+                executor_class = ProcessPoolExecutor
                 self.log_message(f" Usando {num_workers} procesos en paralelo")
                 usar_paralelismo = True
             
@@ -674,7 +691,7 @@ class ScanAppGUI(ctk.CTk):
             if usar_paralelismo:
                 args_list = [(nombre, ruta_procesamiento) for nombre in archivos]
                 
-                with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                with executor_class(max_workers=num_workers) as executor:
                     future_to_archivo = {executor.submit(procesar_hoja, args): args[0] 
                                        for args in args_list}
                     
