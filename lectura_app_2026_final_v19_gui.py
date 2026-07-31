@@ -33,7 +33,7 @@ BARCODE_STDERR_LOCK = threading.Lock()
 # CONFIGURACIÓN DE SENSIBILIDAD Y DEBUG
 # ============================================================
 # Cambiar a False cuando NO quieras generar las imágenes de inspección visual
-MODO_DEBUG = True  
+MODO_DEBUG = False  
 
 REF_ID_X, REF_ID_Y = 66, 35
 ANCHO_REFERENCIA, ALTO_REFERENCIA = 1695, 2195
