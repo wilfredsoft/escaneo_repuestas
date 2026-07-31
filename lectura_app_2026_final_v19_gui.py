@@ -36,6 +36,7 @@ BARCODE_STDERR_LOCK = threading.Lock()
 MODO_DEBUG = True  
 
 REF_ID_X, REF_ID_Y = 66, 35
+ANCHO_REFERENCIA, ALTO_REFERENCIA = 1695, 2195
 BINARIZACION_ID = 205
 LLENADO_MIN_ID = 45
 
@@ -278,6 +279,32 @@ def corregir_orientacion(img_bgr):
 
     return max(candidatos, key=puntaje_borde)
 
+def normalizar_resolucion(img_bgr):
+    """
+    Ajusta la hoja al tamaño usado por las coordenadas de calibración.
+
+    Diferencias pequeñas de resolución se acumulan hacia las filas inferiores
+    y pueden desplazar la lectura de ID y respuestas. La orientación debe estar
+    corregida antes de llamar esta función.
+    """
+    if img_bgr is None:
+        return None
+
+    alto, ancho = img_bgr.shape[:2]
+    if ancho == ANCHO_REFERENCIA and alto == ALTO_REFERENCIA:
+        return img_bgr
+
+    if ancho > ANCHO_REFERENCIA or alto > ALTO_REFERENCIA:
+        interpolacion = cv2.INTER_AREA
+    else:
+        interpolacion = cv2.INTER_CUBIC
+
+    return cv2.resize(
+        img_bgr,
+        (ANCHO_REFERENCIA, ALTO_REFERENCIA),
+        interpolation=interpolacion
+    )
+
 def procesar_hoja(args):
     """Procesa una sola hoja con anclaje correcto y eliminación de magenta."""
     ruta_archivo, ruta_carpeta = args
@@ -289,6 +316,9 @@ def procesar_hoja(args):
         
         # Corregir hojas horizontales o invertidas antes de calcular zonas.
         img_raw = corregir_orientacion(img_raw)
+
+        # Todas las coordenadas están calibradas para una resolución común.
+        img_raw = normalizar_resolucion(img_raw)
         
         img_h, img_w = img_raw.shape[:2]
         
