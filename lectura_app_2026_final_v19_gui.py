@@ -38,15 +38,15 @@ MODO_DEBUG = False
 REF_ID_X, REF_ID_Y = 66, 35
 ANCHO_REFERENCIA, ALTO_REFERENCIA = 1695, 2195
 BINARIZACION_ID = 205
-LLENADO_MIN_ID = 45
+LLENADO_MIN_ID = 40
 
 # Configuración específica para Sesión 1 y 2 (43 filas, burbujas pequeñas)
 BINARIZACION_S12 = 225
-LLENADO_MIN_S12 = 28
+LLENADO_MIN_S12 = 20
 
 # Configuración específica para Sesión 3 (25 filas, burbujas grandes)
 BINARIZACION_S3 = 205
-LLENADO_MIN_S3 = 35
+LLENADO_MIN_S3 = 32
 
 MAPA_LETRAS = {0: "A", 1: "B", 2: "C", 3: "D", 4: "E", 5: "F", 6: "G", 7: "H"}
 MARCAS_SESION_REL = [(1560, 156), (1560, 218), (1560, 269), (1560, 320), 
